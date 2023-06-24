@@ -1,59 +1,39 @@
-import Graph from 'graphology';
-import traversal from 'graphology-traversal/dfs'
-import { flodag, flowStatus, taskName, taskOutput, taskOutputs, taskOutputStatus } from "./types"
+import { 
+            flowDag, 
+            flowStatus, 
+            taskDefinitionsObject, 
+            taskName, 
+            taskOutput, 
+            taskOutputs, 
+            taskOutputStatus
+        } from "./types"
+import { FlowDagGraph } from "./graph";
 
-class FloDag {
+class FlowDag {
 
-    private flow: flodag;
+    private flow: flowDag;
     private taskNames: taskName[];
     private taskOutputs: taskOutputs = {};
     private runningTasks = {};
     private totalTasks: number = 0;
     private flowStatus: flowStatus = flowStatus.PENDING; 
-    private startingTasks: taskName[];
+    private graph: FlowDagGraph;
 
-    constructor(flow: flodag) {
+    constructor(flow: flowDag) {
         this.flow = flow;
         this.totalTasks = flow?.tasks ? Object.keys(flow.tasks).length : 0;
         this.taskNames = Object.keys(flow.tasks)
-    }
-
-    private buildAndValidateDAG() {
-        // let graph = new Graph();
-        let seenTasks = {};
-        const taskNames = Object.keys(this.flow.tasks);
-        this.totalTasks = Object.keys(this.flow.tasks).length;
-        for (let i = 0; i < taskNames.length; i++) {
-            let taskName = taskNames[i];
-            let task = this.flow.tasks[taskName];
-            if (typeof task.ref !== "function") {
-                throw "task.ref needs to be a node js function"
-            }
-            if (seenTasks[taskName]) {
-                throw "cannot have more than one task with same name"
-            }
-            seenTasks[taskName] = true;
-            this.flow.tasks[taskName] = { ...task, ...{ failed: null, running: null, done: null, skipped: null } };
-            // graph.addNode(taskName, { ...task, ...{ failed: null, running: null, done: null, skipped: null } })
-            if (!task.follows || task.follows.length == 0) {
-                this.startingTasks.push(taskName);
-            } else if (task.follows && task.follows.length > 0) {
-                for (let j = 0; j < task.follows.length; j++) {
-                    let followingTaskName = task.follows[j]
-                    if (!seenTasks[followingTaskName]) {
-                        throw "graph task order not properly defined, dependent tasks must appear after predecessor tasks"
-                    }
-                    // graph.addEdge(followingTaskName,taskName)
-                }
-            }
-        }
-        // todo: test for cycles
+        this.graph = new FlowDagGraph(flow);
     }
 
     private async tick() {
     
-        if (this.taskCountDoneSoFar() == this.taskNames.length) {
-            // all tasks done
+        if (this.getDagStatus() === flowStatus.PENDING) {
+            this.setDagStatus(flowStatus.RUNNING);
+        }
+
+        if (this.taskCountDoneSoFar() == this.totalTasks) {
+            this.setDagStatus(flowStatus.COMPLETED);
             throw "flow complete";
         } 
 
@@ -65,12 +45,11 @@ class FloDag {
             const task = this.flow.tasks[taskName];
             const taskStatus = this.getTaskStatus(taskName);
 
-            if (taskStatus === undefined) {
+            if (taskStatus === null) {
                 throw `unknown task status for ${taskName}`        
             }
             
-            if ([taskOutputStatus.SKIPPED, taskOutputStatus.FAILED, taskOutputStatus.SUCCESS].includes(taskStatus)
-            || this.isTaskRunning(taskName) ) {
+            if (taskStatus !== taskOutputStatus.PENDING) {
                 continue;
             }
 
@@ -83,67 +62,49 @@ class FloDag {
                 }));
 
                 if (conditionOutput !== true) {
-                    console.log(`${taskNames[i]} skipped because condition false`)
+                    console.log(`${taskName} skipped because condition false`)
                     this.setTaskOuput(taskName, taskOutputStatus.SKIPPED, null)
                     continue;
                 }
             } 
-            console.log("processing task ", taskNames[i])
     
             let prereqs = task.follows;
             if (!prereqs || prereqs.length === 0) {
                 console.log(`...no prereqs found running as starting task`)
-                runTask(taskNames[i])
+                this.runTask(taskName)
                 continue;
             }
-
-            let allDone = true;
-            let somethingFailed = false;
-            let somethingSkipped = false;
-    
-            console.log(`...prereqs for ${taskNames[i]} are ${prereqs}`)
-    
-            let failedPrereqs: taskName[] = [];
-            let donePrereqs: taskName[] = [];
-            let skippedPrereqs: taskName[] = [];
-    
+        
+            let prepreqOutputs: taskOutput[] = [];    
             for (let j = 0; prereqs && j < prereqs.length; j++) {
-                console.log(`......prereqs for ${taskNames[i]} are ${prereqs[j]}`)
-                let prereq = prereqs[j]
-                if (doneTasks[prereq]) {
-                    console.log(`prereq done[${prereq}]: `,!doneTasks[prereq])
-                    donePrereqs.push(taskName)
+                const prereqName = prereqs[j];
+                const prereqStatus: any = this.getTaskStatus(prereqName);
+                if (prereqStatus === null) {
+                    // todo
                 }
-                if (failedTasks[prereq]) {
-                    // apply fail behavior to node 
-                    failedPrereqs.push(taskName)
-                }
-                if (skippedTasks[prereq]) {
-                    // apply fail behavior to node 
-                    console.log("something failed")
-                    skippedPrereqs.push(taskName)
+                const prereqOutput = this.getTaskOutput(prereqName);
+                if (![taskOutputStatus.SUCCESS, taskOutputStatus.FAILED, taskOutputStatus.SKIPPED].includes(prereqStatus)) {
+                    prepreqOutputs.push( this.setTaskOuput(prereqName, prereqStatus, prereqOutput, true) )
                 }
             }
+
+            const successOutputs = this.filterTaskOutputsByStatus(taskOutputStatus.SUCCESS);
+            const skippedOutputs = this.filterTaskOutputsByStatus(taskOutputStatus.SKIPPED);
+            const failedOutputs = this.filterTaskOutputsByStatus(taskOutputStatus.FAILED);
             
-            if (donePrereqs.length < prereqs.length) {
-                allDone=false
-            }
-            
-            if (failedPrereqs.length > 0) {
-                somethingFailed = true;
-            }
-            
-            if (skippedPrereqs.length>0) {
-                somethingSkipped = true;
-            }
-            
+            const allDone = Object.keys(successOutputs).length === prereqs.length ? true : false;
+            const somethingFailed = Object.keys(failedOutputs).length > 0;
+            const somethingSkipped = Object.keys(skippedOutputs).length > 0;
+
+
             if (allDone) {
                 // runTask
-                runTask(taskName)
+                this.runTask(taskName);
             } else {
                 // report parent outputs
-                const report = [skippedPrereqs, failedPrereqs, donePrereqs]
+                const report = { successOutputs, failedOutputs, skippedOutputs };
                 // where does this go
+                // determine wether or not to run task
             }
             
         }
@@ -195,7 +156,6 @@ class FloDag {
     }
 
     async start() {
-        this.buildAndValidateDAG();
         this.tick();
     }
 
@@ -219,7 +179,7 @@ class FloDag {
         delete this.runningTasks[taskName];
     }
 
-    setTaskOuput(taskName, status, output) {
+    setTaskOuput(taskName, status, output, dontAdd = false) {
         let outputObject: any = {};
         if (status == taskOutputStatus.FAILED) {
             outputObject = {
@@ -243,10 +203,13 @@ class FloDag {
                 output
             }
         }
-        this.taskOutputs[taskName] = outputObject as taskOutput;
+        if (!dontAdd) {
+            this.taskOutputs[taskName] = outputObject as taskOutput;
+        }
+        return outputObject;
     }
 
-    private getTaskStatus(taskName): taskOutputStatus | undefined{
+    private getTaskStatus(taskName): taskOutputStatus | null{
         for (let i = 0 ; i < this.taskNames.length; i++) {
             const thisTaskName = this.taskNames[i];
             if (thisTaskName !== taskName) {
@@ -259,10 +222,13 @@ class FloDag {
                 return taskOutputStatus.FAILED;
             } else if (taskOutput.skipped === true) {
                 return taskOutputStatus.SKIPPED;
+            } else if (this.isTaskRunning(taskName)) {
+                return taskOutputStatus.RUNNING; 
             } else {
-                return undefined;
+                return taskOutputStatus.PENDING; 
             }
         }
+        return null;
     }
 
     private filterTaskOutputsByStatus(taskStatus: taskOutputStatus): taskOutputs {
@@ -275,6 +241,14 @@ class FloDag {
             }
         }
         return filteredTasks;
+    }
+
+    private setDagStatus(status: flowStatus) {
+        this.flowStatus = status;
+    }
+
+    public getDagStatus(): flowStatus {
+        return this.flowStatus;
     }
 
 }

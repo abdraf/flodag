@@ -1,13 +1,11 @@
 
-export interface flodag {
+export interface flowDag {
     name: string
     schedule?: string
     params?: params
     // onCompletion: {÷÷  }
     // flow Data
-    tasks: {
-        [key: taskName]: taskAttributes
-    }
+    tasks: taskDefinitionsObject
 }
 
 export type taskName = string;
@@ -38,7 +36,7 @@ export enum failureActions { EXIT_FLOW, STOP_DEPENDENTS, CONTINUE }
 
 export enum flowStatus { PENDING, RUNNING, COMPLETED }
 
-export enum taskOutputStatus { FAILED, SUCCESS, SKIPPED }
+export enum taskOutputStatus { FAILED, SUCCESS, PENDING, RUNNING, SKIPPED }
 
 export interface taskAttributes {
     ref: Function
@@ -52,3 +50,4 @@ export interface taskAttributes {
     onSuccess?: sucessHandler
 } 
 
+export type taskDefinitionsObject = { [key: taskName]: taskAttributes }

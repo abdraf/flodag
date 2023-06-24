@@ -1,76 +1,10 @@
-var Graph = require('graphology')
+
+
+
 let doneTasks = {}
 let failedTasks = {};
 let skippedTasks = {};
 let taskCount = 0;
-
-async function doStuffFail(arg) {
-    await new Promise(resolve => {
-        setTimeout(() => {
-            resolve(true)
-        }, 2000)
-    })
-    console.log("\n Timestamp " + new Date().toISOString() + ": doStuff: " + arg + "\n")
-    return "Timestamp " + new Date().toISOString ()+ ": doStuff: " + arg
-}
-
-async function doStuff(arg) {
-    await new Promise(resolve => {
-        setTimeout(() => {
-            resolve(true)
-        }, 2000)
-    })
-    throw "task  failed"
-    // console.log("\n Timestamp " + new Date().toISOString() + ": doStuff: " + arg + "\n")
-    // return "Timestamp " + new Date().toISOString ()+ ": doStuff: " + arg
-}
-
-
-let flow = {
-    name: 'Example Flow',
-    params: { count: 0, task1params: "task2paramsfromflowdata" },
-    tasks: {
-        task0: { 
-            type: 'JSFunction', 
-            ref: doStuffFail, 
-            params: "task0"
-        },
-        task1: { 
-            type: 'JSFunction', 
-            ref: doStuff, 
-            params: ({ flowparams, taskOutputs }) => {
-                // task0 output will be undefined because it runs in parallel with task 0
-                return `task1 output: the output for task 0 was ${taskOutputs['task0']} and flowparams are ${flowparams}`
-            }
-        },
-        task2: { 
-            type: 'JSFunction', 
-            ref: doStuff, 
-            params: ({ flowparams, taskOutputs }) => {
-                return `task2 from function, output of task1 is ${taskOutputs['task1']}`
-            }, 
-            after: [ 'task1' ] 
-        },
-        task3: { 
-            type: 'JSFunction', 
-            ref: doStuff, 
-            params: "task3", 
-            after: [ 'task1' ]
-        },
-        task4: { 
-            type: 'JSFunction', 
-            ref: doStuff, 
-            params: "task4",
-            condition: ({ flowparams, taskOutputs }) => {
-                return false
-            },
-            after: [ 'task2', 'task3' ] 
-        }
-    }
-}
-
-// console.log(JSON.stringify(flow))
-// return
 
 let taskNames = Object.keys(flow.tasks)
 taskCount = taskNames.length;
@@ -100,7 +34,7 @@ for (let i = 0; i < taskNames.length; i++) {
                 throw "graph task order not properly defined, dependent tasks must appear after predecessor tasks"
             }
             console.log("... follows ", followingTaskName)
-            graph.addEdge(taskName, followingTaskName)
+            graph.addEdge(followingTaskName,taskName)
         }
     }
 }
@@ -211,7 +145,7 @@ async function processFlow() {
     }
 }
 
-async function handleTaskOutput (taskOutput, taskName) {
+async function handleTaskOutput(taskOutput, taskName) {
     console.log('inside handleoutput`')
     doneTasks[taskName] = taskOutput;
     flow.tasks[taskName] = { ...flow.tasks[taskName], ...{     
@@ -237,6 +171,9 @@ async function runTask(taskName) {
     console.log("inside run task", taskName)
     let task = flow.tasks[taskName]
     // console.log('running runTask with', taskName, task)
+    if (typeof task.ref !== 'function') {
+        throw "unknown ref type"
+    }
     if (task.type === 'JSFunction') {
         flow.tasks[taskName] = { ...flow.tasks[taskName], ...{ inprogress: true }}
         let params = task.params;
@@ -263,8 +200,6 @@ async function runTask(taskName) {
         }).catch(taskException => {
             return handleTaskException(taskException, taskName)
         })
-    } else {
-        throw "unknown task type"
     }
 }
 
